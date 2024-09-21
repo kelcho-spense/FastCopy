@@ -1,85 +1,158 @@
-import * as fs from 'fs';
+import * as fs from 'fs-extra';
 import * as path from 'path';
 import cliProgress from 'cli-progress';
 
-/**
- * Recursively copies a directory from source to destination.
- * Ignores the contents of any node_modules directories but still creates empty node_modules directories.
- * @param src - Source directory path
- * @param dest - Destination directory path
- */
-function copyDirectory(src: string, dest: string) {
-  // Check if source exists
-  if (!fs.existsSync(src)) {
-    console.error(`Source directory "${src}" does not exist.`);
-    process.exit(1);
-  }
+const multibar = new cliProgress.MultiBar({
+  clearOnComplete: false,
+  hideCursor: true,
+}, cliProgress.Presets.shades_classic);
 
-  // Create destination directory if it doesn't exist
-  if (!fs.existsSync(dest)) {
-    fs.mkdirSync(dest, { recursive: true });
-  }
+const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
 
-  // Read items in the source directory
-  const items = fs.readdirSync(src);
+let totalFiles = 0;
+let copiedFiles = 0;
+let skippedFiles = 0;
+const overallBar = multibar.create(100, 0);
+const fileBar = multibar.create(100, 0);
 
-  items.forEach((item) => {
-    const srcPath = path.join(src, item);
-    const destPath = path.join(dest, item);
-    const stats = fs.lstatSync(srcPath);
+let ignoreFolders: Set<string> = new Set();
+let ignoreFiles: Set<string> = new Set();
 
-    if (stats.isDirectory()) {
-      if (item === 'node_modules') {
-        // Create empty node_modules directory in destination
-        if (!fs.existsSync(destPath)) {
-          fs.mkdirSync(destPath);
-          console.log(`Created empty directory: ${destPath}`);
+async function loadIgnoreFile(ignoreFilePath: string) {
+  try {
+    const content = await fs.readFile(ignoreFilePath, 'utf-8');
+    content.split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'))
+      .forEach(pattern => {
+        if (pattern.endsWith('/')) {
+          ignoreFolders.add(pattern.slice(0, -1));
+        } else {
+          ignoreFiles.add(pattern);
         }
-      } else {
-        // Recursively copy subdirectories
-        copyDirectory(srcPath, destPath);
-      }
-    } else if (stats.isFile()) {
-      // Copy files
-      fs.copyFileSync(srcPath, destPath);
-      console.log(`Copied file: ${destPath}`);
-    }
-    // Handle symbolic links if necessary
-    // Add more conditions here if you need to handle other types (e.g., symbolic links)
-  });
+      });
+  } catch (error) {
+    console.warn(`Warning: Unable to read .copyignore file. Proceeding without ignore patterns.`);
+  }
 }
 
-/**
- * Entry point of the application.
- */
-function main() {
-  const args = process.argv.slice(2);
+function shouldIgnore(filePath: string, isDirectory: boolean): boolean {
+  const relativePath = path.relative(sourceDir, filePath);
+  const parts = relativePath.split(path.sep);
 
-  if (args.length < 2) {
-    console.error('Usage: copy-project <source_directory> <destination_directory>');
-    process.exit(1);
-  }
-
-  const sourceDir = args[0] ? path.resolve(args[0]) : undefined;
-  const destinationDir = args[1] ? path.resolve(args[1]) : undefined;
-
-  console.log(`Copying from "${sourceDir}" to "${destinationDir}"...`);
-
-  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-
-  function onProgress(source: string, destination: string, progress: number) {
-    bar.update(progress * 100);
-    console.log(`Copying: ${source} -> ${destination}`);
-  }
-
-  if (sourceDir && destinationDir) {
-    bar.start(100, 0);
-    copyDirectory(sourceDir, destinationDir, onProgress);
-    bar.stop();
-    console.log('Copy operation completed.');
+  if (isDirectory) {
+    return parts.some(part => ignoreFolders.has(part));
   } else {
-    console.error('Source or destination directory is undefined.');
+    return ignoreFiles.has(relativePath) || parts.some(part => ignoreFolders.has(part));
   }
 }
 
-main();
+async function copyDirectory(src: string, dest: string) {
+  let entries;
+  try {
+    entries = await fs.readdir(src, { withFileTypes: true });
+  } catch (error) {
+    console.warn(`Warning: Unable to read directory ${src}. Skipping...`);
+    return;
+  }
+
+  await fs.ensureDir(dest);
+  
+  const totalItems = entries.length;
+  progressBar.start(totalItems, 0);
+  let processedItems = 0;
+
+  for (const entry of entries) {
+    const sourcePath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+
+    if (shouldIgnore(sourcePath, entry.isDirectory())) {
+      progressBar.increment();
+      processedItems++;
+      skippedFiles++;
+      overallBar.increment();
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      await copyDirectory(sourcePath, destPath);
+    } else {
+      try {
+        await fs.copy(sourcePath, destPath);
+        console.log(`Copied: ${sourcePath}`);
+        copiedFiles++;
+        overallBar.increment();
+      } catch (error) {
+        console.warn(`Warning: Unable to copy ${sourcePath}. Skipping...`);
+        skippedFiles++;
+        overallBar.increment();
+      }
+    }
+
+    progressBar.increment();
+    processedItems++;
+  }
+
+  if (src === sourceDir) {
+    progressBar.stop();
+  }
+}
+
+// Parse command line arguments
+const args = process.argv.slice(2).reduce((acc, arg) => {
+  const [key, value] = arg.split('=');
+  if (key && value) {
+    acc[key] = value;
+  }
+  return acc;
+}, {} as Record<string, string>);
+
+const sourceDir = path.normalize(args.source ?? '');
+const destinationDir = path.normalize(args.destination ?? '');
+
+console.log(`Copying from ${sourceDir} to ${destinationDir}`);
+const startTime = Date.now();
+
+async function countFiles(dir: string): Promise<number> {
+  let count = 0;
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!shouldIgnore(path.join(dir, entry.name), true)) {
+        count += await countFiles(path.join(dir, entry.name));
+      }
+    } else {
+      if (!shouldIgnore(path.join(dir, entry.name), false)) {
+        count++;
+      }
+    }
+  }
+
+  return count;
+}
+
+async function main() {
+  const ignoreFilePath = path.join(sourceDir, '.copyignore');
+  await loadIgnoreFile(ignoreFilePath);
+
+  // Count total files
+  totalFiles = await countFiles(sourceDir);
+  overallBar.setTotal(totalFiles);
+
+  // Start copying
+  await copyDirectory(sourceDir, destinationDir);
+
+  multibar.stop();
+
+  const endTime = Date.now();
+  const duration = (endTime - startTime) / 1000; // Convert to seconds
+
+  console.log(`\nCopy completed in ${duration.toFixed(2)} seconds.`);
+  console.log(`Total files: ${totalFiles}`);
+  console.log(`Copied files: ${copiedFiles}`);
+  console.log(`Skipped files: ${skippedFiles}`);
+}
+
+// Call the main function
+main().catch(console.error);
