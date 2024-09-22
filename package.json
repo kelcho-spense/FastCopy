@@ -1,12 +1,13 @@
 {
-  "name": "copyfiles",
+  "name": "copy-project",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A high-performance file copying tool using worker threads.",
+  "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/index.ts --source=\"G:\" --destination=\"E:\test\"",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "tsc && node dist/index.js --source=\"G:/\" --destination=\"E:/test\""
+
   },
   "keywords": [],
   "author": "",
