@@ -75,6 +75,10 @@ To ignore additional directories, add them to the `ignoredPaths` array in `src/i
 ## Contributing
 
 Contributions to FastCopy are welcome! Please feel free to submit a Pull Request.
+features in development:
+- Encryption/Decryption: Secure file copying with encryption can be GPU-accelerated.
+- Compression/Decompression: Compress files on-the-fly during copying.
+- Checksum/Hashing: Generate checksums or hashes for files to ensure integrity.
 
 ## License
 
