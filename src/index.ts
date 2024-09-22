@@ -188,7 +188,8 @@ async function main() {
       } else if (message.status === 'skipped') {
         skippedFiles++;
         if (message.error) {
-          console.error(message.error);
+          console.error(`Skipped file: ${message.file}`);
+          console.error(`  Error: ${message.error}`);
         }
       }
       overallBar.update(copiedFiles + skippedFiles);

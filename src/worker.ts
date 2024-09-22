@@ -17,7 +17,7 @@ function normalizePath(filePath: string): string {
   const normalized = path.normalize(filePath);
   if (process.platform === 'win32') {
     // Prepend \\?\ to the path for Windows long path support
-    return normalized.length > 260 ? `\\\\?\\${normalized}` : normalized;
+    return normalized.startsWith('\\\\?\\') ? normalized : `\\\\?\\${normalized}`;
   }
   return normalized;
 }
@@ -25,11 +25,13 @@ function normalizePath(filePath: string): string {
 // Function to Copy a Single File with Optimization for Large Files
 async function copyFile(src: string, dest: string): Promise<void> {
   try {
-    const stats = await fs.stat(normalizePath(src));
+    const normalizedSrc = normalizePath(src);
+    const normalizedDest = normalizePath(dest);
+    const stats = await fs.stat(normalizedSrc);
     if (stats.size > LARGE_FILE_THRESHOLD) {
-      await fs.copy(normalizePath(src), normalizePath(dest));
+      await fs.copy(normalizedSrc, normalizedDest);
     } else {
-      await fs.copyFile(normalizePath(src), normalizePath(dest));
+      await fs.copyFile(normalizedSrc, normalizedDest);
     }
   } catch (error: any) {
     throw new Error(`Failed to copy file: ${error.message}`);
@@ -39,10 +41,10 @@ async function copyFile(src: string, dest: string): Promise<void> {
 // Function to Copy a Batch of Files
 async function copyBatch(files: string[], sourceDir: string, destDir: string): Promise<void> {
   for (const file of files) {
-    const sourcePath = normalizePath(path.join(sourceDir, file));
-    const destPath = normalizePath(path.join(destDir, file));
+    const sourcePath = path.join(sourceDir, file);
+    const destPath = path.join(destDir, file);
     try {
-      await fs.ensureDir(path.dirname(destPath));
+      await fs.ensureDir(normalizePath(path.dirname(destPath)));
       await copyFile(sourcePath, destPath);
       parentPort?.postMessage({ status: 'copied', file });
     } catch (error: any) {
